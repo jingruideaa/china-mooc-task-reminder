@@ -1,0 +1,23 @@
+name: 问题报告
+description: 使用脱敏或虚构内容报告安装与任务读取问题
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传真实邮箱、授权码、Cookie、个人标识、未脱敏课程页面或原始日报。
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 问题现象与期望行为
+      description: 描述发生问题的步骤，优先提供虚构的最小复现。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: Windows、浏览器和 Node.js 版本；请勿填写账户或设备标识。
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏复现片段
+      description: 上传前人工确认不含私人信息。待核实不等于未完成。

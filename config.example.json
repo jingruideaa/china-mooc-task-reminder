@@ -1,0 +1,11 @@
+{
+  "smtp": {
+    "host": "smtp.qq.com",
+    "port": 587,
+    "enableSsl": true,
+    "username": "student@example.com",
+    "from": "student@example.com",
+    "to": ["student@example.com"],
+    "credentialTarget": "ChinaMOOC-QQSMTP"
+  }
+}

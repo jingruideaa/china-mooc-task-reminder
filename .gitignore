@@ -1,0 +1,29 @@
+# Per-install settings, report data and generated browser connection token.
+.local/
+extension/bridge_config.js
+.env
+.env.*
+!.env.example
+node_modules/
+coverage/
+*.log
+*.zip
+*.crx
+*.pem
+*.key
+# Browser data must never become source code.
+**/User Data/
+**/*profile*/
+**/Cookies
+**/History
+**/Login Data
+**/Local State
+**/reports/
+bridge_config.json
+bridge-status.json
+# Editor and OS state.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

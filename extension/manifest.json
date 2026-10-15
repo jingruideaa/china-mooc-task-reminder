@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "中国大学 MOOC 任务提醒",
+  "version": "0.4.0",
+  "description": "在当前浏览器登录会话中读取中国大学 MOOC 任务并发送提醒。",
+  "permissions": [
+    "alarms",
+    "notifications",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.icourse163.org/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "icons": {
+    "128": "icon128.png"
+  },
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "中国大学 MOOC 任务检查",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.icourse163.org/*"
+      ],
+      "js": [
+        "exams.js",
+        "model.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
