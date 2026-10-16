@@ -1,4 +1,48 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>MOOC 任务提醒</title>
-<style>body{font:14px system-ui,sans-serif;width:340px;margin:18px;color:#222}h1{font-size:18px}button{width:100%;padding:10px;border:0;background:#24644b;color:white;border-radius:6px;cursor:pointer}button:disabled{opacity:.6}#status,#report{white-space:pre-wrap;line-height:1.7}small{color:#666}details{margin-top:14px}#report{max-height:400px;overflow:auto;font-size:12px}</style></head>
-<body><h1>中国大学 MOOC 任务提醒</h1><p>每天北京时间 20:00 检查全部在学课程的作业、评价和考试。</p><button id="run">立即检查并发邮件</button><p id="status">正在读取状态…</p><small>电脑和 Edge 需要运行并联网。错过时间会在下次启动 Edge 时补查；登录过期会发送提示邮件。</small><details><summary>查看上次报告</summary><div id="report">暂无报告</div></details><script src="popup.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MOOC 任务提醒</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="eyebrow">学习任务 · 每日提醒</div>
+    <h1>中国大学 MOOC</h1>
+    <p class="subtitle">每天北京时间 20:00，检查全部在学课程</p>
+  </header>
+  <main>
+    <div id="status" class="status" role="status" aria-live="polite">正在读取状态…</div>
+    <div id="error" class="notice" role="alert" hidden></div>
+    <div class="actions">
+      <button id="run" class="primary">立即检查并发邮件</button>
+      <button id="retry" class="secondary" hidden>重发报告邮件</button>
+    </div>
+    <section id="summary" class="summary" aria-label="上次检查的任务统计" hidden>
+      <div><strong id="count-pending">0</strong><span>未完成</span></div>
+      <div><strong id="count-urgent">0</strong><span>24 小时内</span></div>
+      <div><strong id="count-near">0</strong><span>7 天内</span></div>
+      <div><strong id="count-uncertain">0</strong><span>待核实</span></div>
+    </section>
+    <p id="snapshot" class="meta"></p>
+    <nav id="filters" class="filters" aria-label="筛选上次检查的任务" hidden>
+      <button data-filter="pending" aria-pressed="true">未完成</button>
+      <button data-filter="near" aria-pressed="false">临近截止</button>
+      <button data-filter="exams" aria-pressed="false">考试</button>
+      <button data-filter="uncertain" aria-pressed="false">待核实</button>
+    </nav>
+    <section id="tasks" class="tasks" aria-label="任务清单"></section>
+    <p id="mail" class="meta"></p>
+    <p id="next" class="meta"></p>
+    <details>
+      <summary>完整报告</summary>
+      <button id="copy" class="secondary copy" disabled>复制报告</button>
+      <pre id="report">暂无报告</pre>
+    </details>
+  </main>
+  <footer>电脑、浏览器和邮件服务需保持运行。清单以检查时的网站记录为准；登录过期会提示。<span id="version"></span></footer>
+  <script src="presentation.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

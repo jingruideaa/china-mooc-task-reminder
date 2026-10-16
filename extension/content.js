@@ -103,10 +103,11 @@
     const self = [...(review?.querySelectorAll('.jdtab') || [])].find(t => visible(t) && /自评/.test(text(t)));
     const reviewFuture = !!review?.classList.contains('feature');
     const reviewDeadline = (review?.querySelector('.j-bar')?.title || '').split(/~|～/).pop() || task.reviewDeadline;
-    const submitted = [...submission.querySelectorAll('.j-status')].some(t => MoocModel.hasClass(t.className, 'done'));
-    const selfDone = self ? MoocModel.hasClass(self.querySelector('.j-status')?.className, 'done') : true;
-    let peerEvidence = { text: '' };
-    if (peer && !reviewFuture && !MoocModel.hasClass(peer.className, 'disabled')) {
+    const submitted = MoocModel.phaseDone([...submission.querySelectorAll('.j-status')].map(t => t.className).join(' '));
+    const selfDone = self ? MoocModel.phaseDone(self.querySelector('.j-status')?.className) : true;
+    // A completed status is enough; opening the optional review list is unnecessary.
+    let peerEvidence = { text: '', status: peer?.querySelector('.j-status')?.className || '' };
+    if (peer && !reviewFuture && !MoocModel.hasClass(peer.className, 'disabled') && !MoocModel.hasClass(peerEvidence.status, 'done')) {
       peer.click();
       await wait(900);
       // View the existing review list without requesting a new review assignment.

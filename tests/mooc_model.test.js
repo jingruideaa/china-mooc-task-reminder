@@ -54,3 +54,45 @@ test('future reviews and failed detail reads do not become incomplete tasks', ()
   assert.equal(report.uncertain.length, 2);
   assert.match(report.body, /不能据此认定所有任务均已完成/);
 });
+test('missing phase markers stay unknown and done does not match undone', () => {
+  assert.equal(M.phaseDone(''), null);
+  assert.equal(M.phaseDone('j-status'), null);
+  assert.equal(M.phaseDone('j-status undone'), false);
+  assert.equal(M.phaseDone('j-status undone done'), true);
+});
+test('different assignment and quiz IDs survive identical names and deadlines', () => {
+  for (const kind of ['作业', '测验']) {
+    const task = { course: '示例课程', courseKey: 'source', kind, name: '同名任务', deadline: '2027/04/05 23:00' };
+    assert.equal(M.uniqueTasks([{ ...task, taskId: '111' }, { ...task, taskId: '222' }]).length, 2);
+  }
+});
+test('deadline parsing rejects invalid dates and keeps seconds in Beijing time', () => {
+  assert.equal(M.timestamp('2026年10月16日 20：30：45'), Date.parse('2026-10-16T20:30:45+08:00'));
+  for (const value of ['2026/02/30 20:00', '2026/13/16 20:00', '2026/10/16 24:00', '2026/10/16 20:60', '2026/10/16 20:00:99', '无截止时间']) assert.ok(Number.isNaN(M.timestamp(value)), value);
+});
+test('self and peer reviews stay separate when only one stage is complete', () => {
+  const task = { course: '示例课程', kind: '作业', name: '示例作业', submitted: true, reviewRequired: true, peerRequired: true, selfRequired: true, reviewDeadline: '2026/10/18 23:30' };
+  const now = Date.parse('2026-10-16T10:00:00+08:00');
+  assert.deepEqual(M.makeReport([], [{ ...task, peerDone: false, selfDone: true }], [], now).pending.map(t => t.stage), ['互评']);
+  assert.deepEqual(M.makeReport([], [{ ...task, peerDone: true, selfDone: false }], [], now).pending.map(t => t.stage), ['自评']);
+  const unknown = M.makeReport([], [{ ...task, peerDone: null, selfDone: null }], [], now);
+  assert.equal(unknown.pending.length, 0);
+  assert.deepEqual(unknown.uncertain.map(t => t.stage).sort(), ['互评', '自评'].sort());
+  const complete = M.makeReport([], [{ ...task, peerDone: true, selfDone: true, reviewFuture: true }], [], now);
+  assert.equal(complete.upcoming.length, 0);
+});
+test('deadline summaries include urgent tasks and approaching uncertain tasks in order', () => {
+  const now = Date.parse('2026-10-16T10:00:00+08:00');
+  const task = { course: '示例课程', kind: '测验', count: '0/2' };
+  const report = M.makeReport([], [
+    { ...task, name: '稍后', deadline: '2026/10/20 10:00' },
+    { ...task, name: '今天', deadline: '2026/10/16 18:00' },
+    { ...task, name: '未知', count: '', deadline: '2026/10/17 08:00' },
+    { ...task, name: '逾期', deadline: '2026/10/15 18:00' }
+  ], [], now);
+  assert.deepEqual(report.pending.map(t => t.name), ['逾期', '今天', '稍后']);
+  assert.deepEqual(report.urgent.map(t => t.name), ['今天']);
+  assert.deepEqual(report.overdue.map(t => t.name), ['逾期']);
+  assert.deepEqual(report.uncertainNear.map(t => t.name), ['未知']);
+  assert.match(report.body, /7 天内到期但状态待核实/);
+});

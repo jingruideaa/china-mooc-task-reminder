@@ -2,8 +2,12 @@
   const DAY = 86400000;
   const Exams = scope.MoocExams || (typeof require === 'function' ? require('./exams') : null);
   function timestamp(value) {
-    const m = String(value || '').match(/(\d{4})[年/.-](\d{1,2})[月/.-](\d{1,2})日?(?:\s*[/（(]?(?:周|星期)[一二三四五六日天][）)]?)?\s+(\d{1,2}):(\d{2})/);
-    return m ? Date.parse(`${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}T${m[4].padStart(2, '0')}:${m[5]}:00+08:00`) : NaN;
+    const m = String(value || '').match(/(\d{4})[年/.-](\d{1,2})[月/.-](\d{1,2})日?(?:\s*[/（(]?(?:周|星期)[一二三四五六日天][）)]?)?[\sT]+(\d{1,2})[:：](\d{2})(?:[:：](\d{2}))?/);
+    if (!m) return NaN;
+    const [year, month, day, hour, minute, second] = m.slice(1).map(v => Number(v || 0));
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day || hour > 23 || minute > 59 || second > 59) return NaN;
+    return date.getTime() - 8 * 3600000;
   }
   function chinaDate(now = Date.now()) { return new Date(now + 8 * 3600000).toISOString().slice(0, 10); }
   function nextRun(now = Date.now()) {
@@ -12,6 +16,11 @@
   }
   function lastSlot(now = Date.now()) { return chinaDate(now >= Date.parse(`${chinaDate(now)}T20:00:00+08:00`) ? now : now - DAY); }
   function hasClass(value, name) { return String(value || '').split(/\s+/).includes(name); }
+  function phaseDone(status) {
+    if (hasClass(status, 'done')) return true;
+    if (hasClass(status, 'undone')) return false;
+    return null;
+  }
   function peerState(evidence = {}) {
     const body = String(evidence.text || '').replace(/\s+/g, '');
     // Extra reviews may still be offered after the required quota is met.
@@ -59,7 +68,8 @@
     }
     const grouped = new Map();
     for (const task of tasks) {
-      const key = [task.canonicalCourseKey || task.courseKey || task.course, task.kind, task.name, task.deadline, ...(task.kind === '考试' ? [task.taskId || '', task.part || '', task.startTime || ''] : [])].join('|');
+      // Different task IDs must survive even when titles and deadlines match.
+      const key = [task.canonicalCourseKey || task.courseKey || task.course, task.kind, task.taskId || task.name, task.deadline, ...(task.kind === '考试' ? [task.part || '', task.startTime || ''] : [])].join('|');
       const group = grouped.get(key) || []; group.push(task); grouped.set(key, group);
     }
     return [...grouped.values()].map(group => {
@@ -81,12 +91,13 @@
     const add = (task, stage, done, deadline, future = false) => {
       const dueAt = timestamp(deadline);
       const item = { course: task.course, name: task.name, stage, deadline: deadline || '未读到截止时间', url: task.url || '', dueAt: Number.isFinite(dueAt) ? dueAt : null, overdue: Number.isFinite(dueAt) && dueAt < now };
+      if (done === true) return;
       if (future) upcoming.push(item);
       else if (done === false) pending.push(item);
       else if (done !== true) uncertain.push(item);
     };
     for (const task of tasks) {
-      if (task.error) { uncertain.push({ course: task.course, name: task.name, stage: task.error, deadline: task.deadline || '' }); continue; }
+      if (task.error) { add(task, task.error, null, task.deadline); continue; }
       if (task.kind === '考试') {
         const done = Exams.completion(task), startsAt = timestamp(task.startTime), dueAt = timestamp(task.deadline);
         const future = Number.isFinite(startsAt) && startsAt > now;
@@ -103,7 +114,12 @@
       if (task.peerRequired) add(task, '互评', task.peerDone, task.reviewDeadline, task.reviewFuture === true);
       if (task.selfRequired) add(task, '自评', task.selfDone, task.reviewDeadline, task.reviewFuture === true);
     }
+    const byDeadline = (a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity) || String(a.course).localeCompare(String(b.course), 'zh-CN') || String(a.name).localeCompare(String(b.name), 'zh-CN');
+    for (const list of [pending, uncertain, upcoming, exams]) list.sort(byDeadline);
     const near = pending.filter(t => t.dueAt !== null && t.dueAt >= now && t.dueAt - now <= 7 * DAY);
+    const uncertainNear = uncertain.filter(t => t.dueAt !== null && t.dueAt >= now && t.dueAt - now <= 7 * DAY);
+    const overdue = pending.filter(t => t.overdue);
+    const urgent = near.filter(t => t.dueAt - now <= DAY);
     const checkedAt = new Date(now).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     const examOpeningSoon = exams.filter(t => t.opensSoon), examDueSoon = exams.filter(t => t.dueSoon);
     const line = t => `- ${t.course}｜${t.name}｜${t.stage}｜${t.deadline}${t.overdue ? '｜已逾期' : ''}`;
@@ -114,7 +130,9 @@
       '中国大学 MOOC 每日任务报告', `检查时间：${checkedAt}（北京时间）`,
       `发现 ${courses.length} 门在学课程：`, ...courses.map(c => `- ${c.kind}：${c.name}`), '',
       '确认未完成：', ...(pending.length ? pending.map(line) : ['无已确认的未完成任务']), '',
+      '24 小时内到期：', ...(urgent.length ? urgent.map(line) : ['无已确认项目']), '',
       '7 天内到期：', ...(near.length ? near.map(line) : ['无已确认的即将到期任务']), '',
+      '7 天内到期但状态待核实：', ...(uncertainNear.length ? uncertainNear.map(line) : ['无已识别项目']), '',
       '考试提醒：', ...(exams.length ? exams.map(examLine) : [emptyExamSummary]),
       '7 天内开放的考试：', ...(examOpeningSoon.length ? examOpeningSoon.map(examLine) : ['无已识别项目']),
       '7 天内截止的未完成考试（含状态待核实）：', ...(examDueSoon.length ? examDueSoon.map(examLine) : ['无已识别项目']), '',
@@ -124,8 +142,8 @@
       warnings.length || uncertain.length ? '本次存在未能确认的项目，不能据此认定所有任务均已完成。' : '',
       `共读取 ${rawTasks.length} 条任务记录，合并同源记录后 ${tasks.length} 项。`
     ].join('\n');
-    return { id: `mooc-${now}`, checkedAt, courses, tasks, rawTaskCount: rawTasks.length, pending, near, uncertain, upcoming, exams, examChecks, examOpeningSoon, examDueSoon, warnings, body };
+    return { id: `mooc-${now}`, checkedAt, checkedAtMs: now, courses, tasks, rawTaskCount: rawTasks.length, pending, near, urgent, overdue, uncertain, uncertainNear, upcoming, exams, examChecks, examOpeningSoon, examDueSoon, warnings, body };
   }
-  scope.MoocModel = { timestamp, chinaDate, nextRun, lastSlot, hasClass, peerState, quizDone, uniqueTasks, makeReport };
+  scope.MoocModel = { timestamp, chinaDate, nextRun, lastSlot, hasClass, phaseDone, peerState, quizDone, uniqueTasks, makeReport };
   if (typeof module !== 'undefined') module.exports = scope.MoocModel;
 })(globalThis);

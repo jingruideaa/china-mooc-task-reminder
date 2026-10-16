@@ -1,9 +1,12 @@
 importScripts('exams.js', 'model.js', 'bridge_config.js');
 const ALARM = 'mooc-daily-check';
 const RETRY = 'mooc-check-retry';
+const WATCH = 'mooc-check-watchdog';
 const BASE = 'https://www.icourse163.org';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let running = false;
+let mailSending = false;
+let recovering;
 
 async function send(tabId, message) {
   const result = await chrome.tabs.sendMessage(tabId, message);
@@ -110,51 +113,118 @@ async function scan() {
   }
 }
 async function runCheck(reason = 'manual') {
-  if (running) return;
+  if (running || mailSending) return false;
   running = true;
-  await chrome.alarms.clear(RETRY);
-  await chrome.storage.local.set({ pendingMail: null, pendingMailSlot: null });
+  // Capture the due day before scanning, which can cross the next 20:00 slot.
+  const slot = reason === 'manual' ? null : MoocModel.lastSlot();
   const heartbeat = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
-  await chrome.storage.local.set({ running: true, progress: '正在读取在学课程…', lastError: null, runStartedAt: Date.now() });
   let report;
-  try { report = await scan(); }
-  catch (e) {
-    report = { id: `mooc-${Date.now()}`, checkedAt: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }), authRequired: !!e.authRequired, error: e.message,
-      body: `中国大学 MOOC 每日检查未完成\n\n${e.message}\n\n本次未能确认任务状态，请勿将其理解为没有未完成任务。` };
-  }
   try {
-    await chrome.storage.local.set({ lastReport: report, progress: '正在发送邮件…', mailState: 'sending' });
-    await deliver(report);
-    await chrome.storage.local.set({ mailState: 'sent', lastError: null, lastSentAt: Date.now(), pendingMail: null, pendingMailSlot: null, ...(reason !== 'manual' ? { lastScheduledSlot: MoocModel.lastSlot() } : {}) });
-    await notify(report.error ? 'MOOC 检查需要处理' : 'MOOC 每日检查完成', report.error || `未完成 ${report.pending.length} 项，7 天内到期 ${report.near.length} 项，待核实 ${report.uncertain.length + (report.warnings || []).length} 项。邮件已发送。`);
+    await chrome.alarms.clear(RETRY);
+    await chrome.storage.local.set({ running: true, progress: '正在读取在学课程…', runStartedAt: Date.now() });
+    try { report = await scan(); }
+    catch (e) {
+      report = { id: `mooc-${Date.now()}`, checkedAtMs: Date.now(), checkedAt: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }), authRequired: !!e.authRequired, error: e.message,
+        body: `中国大学 MOOC 每日检查未完成\n\n${e.message}\n\n本次未能确认任务状态，请勿将其理解为没有未完成任务。` };
+    }
+    // Save before sending, so a worker restart can retry the same report ID.
+    // Keep the previous pending mail until a replacement report is ready.
+    await chrome.storage.local.set({ lastReport: report, pendingMail: report, pendingMailSlot: slot, mailRetryAttempts: 0, progress: '正在发送邮件…', lastCheckError: report.error || null });
+    await retryMail(true);
   } catch (e) {
-    await chrome.storage.local.set({ mailState: 'failed', pendingMail: report, pendingMailSlot: reason !== 'manual' ? MoocModel.lastSlot() : null, lastError: `邮件未发送：${e.message}` });
-    await chrome.alarms.create(RETRY, { delayInMinutes: 5 });
-    await notify('MOOC 报告邮件尚未发送', '报告已保存在扩展中，5 分钟后重试邮件发送。');
+    await chrome.storage.local.set({ lastError: `检查未能完成：${e.message}` });
+    const { pendingMail } = await chrome.storage.local.get('pendingMail');
+    if (pendingMail) await scheduleRetry(5);
   } finally {
     clearInterval(heartbeat); running = false;
-    await chrome.storage.local.set({ running: false, progress: '', ...(report.error ? { lastCheckError: report.error } : { lastCheckError: null }) });
+    await chrome.storage.local.set({ running: false, progress: '' });
     await armAlarm();
   }
+  return true;
+}
+async function scheduleRetry(minutes) {
+  const when = Date.now() + minutes * 60000;
+  await chrome.storage.local.set({ nextMailRetryAt: when });
+  await chrome.alarms.create(RETRY, { when });
+}
+async function updateBadge(report) {
+  if (!chrome.action) return;
+  const count = (report.pending?.length || 0) + (report.uncertain?.length || 0) + (report.warnings?.length || 0);
+  try {
+    await chrome.action.setBadgeText({ text: report.error ? '!' : count ? String(Math.min(count, 99)) : '' });
+    await chrome.action.setBadgeBackgroundColor({ color: report.error || report.urgent?.length ? '#a53030' : '#24644b' });
+  } catch (_) {}
+}
+async function retryMail(duringCheck = false) {
+  if (mailSending || (running && !duringCheck)) return { started: false, busy: true };
+  mailSending = true;
+  let pendingMail, pendingMailSlot, mailRetryAttempts;
+  try {
+    ({ pendingMail, pendingMailSlot, mailRetryAttempts = 0 } = await chrome.storage.local.get(['pendingMail', 'pendingMailSlot', 'mailRetryAttempts']));
+    if (!pendingMail) return { started: false };
+    await chrome.alarms.clear(RETRY);
+    await chrome.storage.local.set({ mailState: 'sending', nextMailRetryAt: null });
+    await deliver(pendingMail);
+    const current = await chrome.storage.local.get(['pendingMail', 'lastScheduledSlot']);
+    if (current.pendingMail?.id !== pendingMail.id) return { started: true, sent: false };
+    // Sending an older saved report must not move the completed day backwards.
+    const slot = [current.lastScheduledSlot, pendingMailSlot].filter(Boolean).sort().pop();
+    await chrome.storage.local.set({ pendingMail: null, pendingMailSlot: null, mailState: 'sent', lastError: null, lastSentAt: Date.now(), mailRetryAttempts: 0, nextMailRetryAt: null, ...(slot ? { lastScheduledSlot: slot } : {}) });
+    await updateBadge(pendingMail);
+    await notify(pendingMail.error ? 'MOOC 检查需要处理' : 'MOOC 报告已发送', pendingMail.error || `未完成 ${pendingMail.pending?.length || 0} 项，7 天内到期 ${pendingMail.near?.length || 0} 项。邮件已发送。`);
+    return { started: true, sent: true };
+  } catch (e) {
+    if (pendingMail && (await chrome.storage.local.get('pendingMail')).pendingMail?.id === pendingMail.id) {
+      const attempts = mailRetryAttempts + 1;
+      const minutes = Math.min(60, attempts === 1 ? 5 : 15 * 2 ** Math.min(attempts - 2, 2));
+      await chrome.storage.local.set({ mailState: 'failed', mailRetryAttempts: attempts, lastError: `邮件未发送：${e.message}` });
+      await scheduleRetry(minutes);
+      await updateBadge(pendingMail);
+      if (attempts === 1) await notify('MOOC 报告邮件尚未发送', '报告已保存在扩展中，可点击“重发报告邮件”，也会自动重试。');
+    }
+    return { started: true, sent: false };
+  } finally { mailSending = false; }
 }
 async function armAlarm() {
-  await chrome.alarms.create(ALARM, { when: MoocModel.nextRun() });
-  await chrome.storage.local.set({ nextCheckAt: MoocModel.nextRun() });
+  const when = MoocModel.nextRun();
+  await chrome.alarms.create(ALARM, { when });
+  await chrome.alarms.create(WATCH, { periodInMinutes: 1 });
+  await chrome.storage.local.set({ nextCheckAt: when });
+}
+async function ensureAlarms() {
+  const daily = await chrome.alarms.get(ALARM);
+  if (!daily) {
+    const when = MoocModel.nextRun();
+    await chrome.alarms.create(ALARM, { when });
+    await chrome.storage.local.set({ nextCheckAt: when });
+  }
+  if (!await chrome.alarms.get(WATCH)) await chrome.alarms.create(WATCH, { periodInMinutes: 1 });
+}
+async function recoverState() {
+  if (recovering) return recovering;
+  recovering = (async () => {
+    const state = await chrome.storage.local.get(['installedAt', 'lastScheduledSlot', 'running', 'pendingMail', 'pendingMailSlot', 'nextMailRetryAt']);
+    if (state.running && !running) {
+      // Old tab IDs cannot prove ownership after a browser restart.
+      await chrome.storage.local.remove('checkTabId');
+      await chrome.storage.local.set({ running: false, progress: '', lastError: '上次检查被中断，可重新检查；已保存的报告仍会重发。' });
+    }
+    if (state.pendingMail && !running && !mailSending) {
+      const when = Math.max(Date.now() + 1000, state.nextMailRetryAt || Date.now() + 60000);
+      await chrome.alarms.create(RETRY, { when });
+      await chrome.storage.local.set({ nextMailRetryAt: when });
+    }
+    const slot = MoocModel.lastSlot();
+    if (!running && !mailSending && state.installedAt && state.lastScheduledSlot !== slot && !(state.pendingMail && state.pendingMailSlot === slot) && Date.parse(slot + 'T20:00:00+08:00') >= state.installedAt) void runCheck('catchup');
+  })();
+  try { await recovering; } finally { recovering = null; }
 }
 async function startup() {
   try {
     await fetch('http://127.0.0.1:8765/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-MOOC-Token': MOOC_BRIDGE_TOKEN }, body: JSON.stringify({ extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version }), signal: AbortSignal.timeout(5000) });
   } catch (_) {}
-  const state = await chrome.storage.local.get(['installedAt', 'lastScheduledSlot', 'running', 'checkTabId', 'pendingMail', 'mailState']);
-  if (state.mailState === 'sent' && !state.pendingMail) await chrome.storage.local.set({ lastError: null });
-  if (state.running && !running) {
-    // Tab IDs from a previous browser session cannot prove present ownership.
-    await chrome.storage.local.remove('checkTabId');
-    await chrome.storage.local.set({ running: false, lastError: '上次检查被浏览器关闭中断，将重新检查。' });
-  }
   await armAlarm();
-  if (state.pendingMail) await chrome.alarms.create(RETRY, { delayInMinutes: 1 });
-  if (state.installedAt && state.lastScheduledSlot !== MoocModel.lastSlot() && Date.parse(MoocModel.lastSlot() + 'T20:00:00+08:00') >= state.installedAt) void runCheck('catchup');
+  await recoverState();
 }
 chrome.runtime.onInstalled.addListener(() => {
   void (async () => {
@@ -167,24 +237,20 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => { void startup(); });
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === ALARM) void runCheck('scheduled');
-  if (alarm.name === RETRY) {
-    void (async () => {
-      const { pendingMail, pendingMailSlot } = await chrome.storage.local.get(['pendingMail', 'pendingMailSlot']);
-      if (!pendingMail) return;
-      try {
-        await deliver(pendingMail);
-        if ((await chrome.storage.local.get('pendingMail')).pendingMail?.id !== pendingMail.id) return;
-        await chrome.storage.local.set({ pendingMail: null, pendingMailSlot: null, mailState: 'sent', lastError: null, lastSentAt: Date.now(), ...(pendingMailSlot ? { lastScheduledSlot: pendingMailSlot } : {}) });
-      } catch (e) {
-        if ((await chrome.storage.local.get('pendingMail')).pendingMail?.id !== pendingMail.id) return;
-        await chrome.storage.local.set({ lastError: `邮件重试失败：${e.message}` });
-        await chrome.alarms.create(RETRY, { delayInMinutes: 15 });
-      }
-    })();
-  }
+  if (alarm.name === RETRY) void retryMail();
+  if (alarm.name === WATCH) void recoverState();
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('popup.html')) return;
-  if (message.type === 'runNow') { void runCheck(); respond({ started: true }); }
-  if (message.type === 'status') { chrome.storage.local.get(['lastReport', 'lastError', 'mailState', 'running', 'progress', 'nextCheckAt', 'lastSentAt']).then(respond); return true; }
+  if (message.type === 'runNow') { const started = !running && !mailSending; if (started) void runCheck(); respond({ started }); }
+  if (message.type === 'retryMail') { retryMail().then(respond); return true; }
+  if (message.type === 'status') {
+    (async () => {
+      await recoverState();
+      const { pendingMail, ...state } = await chrome.storage.local.get(['lastReport', 'pendingMail', 'lastError', 'mailState', 'progress', 'nextCheckAt', 'lastSentAt', 'nextMailRetryAt', 'mailRetryAttempts']);
+      return { ...state, hasPendingMail: !!pendingMail, running, mailSending };
+    })().then(respond).catch(error => respond({ error: error.message })); return true;
+  }
 });
+// Check alarm persistence on every cold worker start without postponing an existing alarm.
+void ensureAlarms().catch(() => {});

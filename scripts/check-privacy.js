@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '..');
+const git = (args, options = {}) => spawnSync('git', ['-c', 'safe.directory=' + ROOT.replaceAll('\\', '/'), ...args], { cwd: ROOT, windowsHide: true, ...options });
 const forbiddenPath = /(?:^|\/)(?:\.local|reports|node_modules|[^/]*profile[^/]*|User Data)(?:\/|$)|(?:^|\/)(?:Cookies|History|Login Data|Local State|bridge_config\.json|bridge-status\.json)$|^extension\/bridge_config\.js$/i;
 function filesOnDisk(dir = ROOT) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -28,11 +29,11 @@ function checkPrivacy(files, read) {
   return issues;
 }
 if (require.main === module) {
-  const result = spawnSync('git', ['ls-files', '--cached', '-z'], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+  const result = git(['ls-files', '--cached', '-z'], { encoding: 'utf8' });
   const staged = result.status === 0 ? result.stdout.split('\0').filter(Boolean) : [];
   const files = staged.length ? staged : filesOnDisk();
   const read = staged.length ? file => {
-    const blob = spawnSync('git', ['show', ':' + file], { cwd: ROOT, windowsHide: true, maxBuffer: 3000000 });
+    const blob = git(['show', ':' + file], { maxBuffer: 3000000 });
     if (blob.status !== 0) throw new Error('Could not inspect staged file: ' + file);
     return blob.stdout;
   } : file => fs.readFileSync(path.join(ROOT, file));
