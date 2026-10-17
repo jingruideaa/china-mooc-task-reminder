@@ -8,8 +8,9 @@ flowchart LR
   B --> C[作业、测验、评价与考试读取]
   C --> D[同源合并及日报]
   D --> E[本机 HTTP 邮件服务]
-  E --> F[PowerShell SMTP]
-  G[Windows 凭据管理器] --> F
+  E --> F[Node.js IPv4 STARTTLS SMTP]
+  G[Windows 凭据管理器] --> P[PowerShell 读取凭据]
+  P --> F
   F --> H[用户配置的收件邮箱]
 ```
 
@@ -23,6 +24,7 @@ flowchart LR
 - `extension/presentation.js` 与 `popup.*`：任务清单、筛选、截止倒计时、课程链接和报告复制。
 - `bridge/server.js`：本机接口、连接令牌校验、报告保存及发送回执。
 - `bridge/mailer.js` 与 `scripts/send-report.ps1`：邮件发送边界。
+- `bridge/smtp.js`：IPv4 SMTP、STARTTLS 及证书验证；`smtp-cli.js` 从标准输入读取发信参数，避免授权码进入命令行或临时文件。
 - `bridge/CredentialStore.cs`：Windows 普通凭据读写封装。
 
 ## 数据与接口
