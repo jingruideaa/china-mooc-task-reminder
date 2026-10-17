@@ -1,4 +1,4 @@
-importScripts('exams.js', 'model.js', 'bridge_config.js');
+importScripts('exams.js', 'model.js', 'reviews.js', 'bridge_config.js');
 const ALARM = 'mooc-daily-check';
 const RETRY = 'mooc-check-retry';
 const WATCH = 'mooc-check-watchdog';
@@ -41,6 +41,63 @@ async function deliver(report) {
 async function notify(title, message) {
   try { await chrome.notifications.create({ type: 'basic', iconUrl: 'icon128.png', title, message }); } catch (_) {}
 }
+async function completeReviews(tabId, listUrl, task, detail, course, warnings) {
+  const actions = [];
+  let current = { ...task, ...detail };
+  const refreshAssignment = async () => {
+    await navigate(tabId, listUrl);
+    const listing = await send(tabId, { type: 'tasks' });
+    const found = listing.tasks.find(item => task.taskId && item.taskId === task.taskId) || listing.tasks.find(item => item.index === task.index && item.name === task.name);
+    if (!found) throw new Error('作业列表变化，无法重新确认评价结果');
+    return { ...found, ...await send(tabId, { type: 'assignment', task: found }) };
+  };
+  for (const stage of ['自评', '互评']) {
+    const journalKey = JSON.stringify([course.href, current.taskId || task.name, stage]);
+    for (let n = 0; n < (stage === '自评' ? 1 : 10); n++) {
+      const settings = await chrome.storage.local.get(['autoReviewEnabled', 'autoReviewJournal']);
+      if (!settings.autoReviewEnabled || !MoocReviews.allowed(current, stage)) break;
+      const journal = settings.autoReviewJournal || {};
+      const prior = journal[journalKey];
+      if (prior?.state === 'submitting') {
+        warnings.push(`${course.name}｜${task.name}｜${stage}：上次评分提交结果待核实，已暂停自动重试`);
+        break;
+      }
+      let prepared;
+      try {
+        await chrome.storage.local.set({ progress: `正在自动${stage}：${course.name}｜${task.name}` });
+        prepared = await send(tabId, { type: 'reviewPrepare', task: { ...current, kind: '作业' }, stage });
+        if (!prepared.ready) {
+          if (prepared.done) current[stage === '自评' ? 'selfDone' : 'peerDone'] = true;
+          else if (prepared.reason) warnings.push(`${course.name}｜${task.name}｜${stage}：${prepared.reason}`);
+          break;
+        }
+        if (!(await chrome.storage.local.get('autoReviewEnabled')).autoReviewEnabled) break;
+        const entry = { state: 'submitting', at: Date.now(), stage, course: course.name, task: task.name, total: prepared.total };
+        await chrome.storage.local.set({ autoReviewJournal: { ...journal, [journalKey]: entry } });
+        const result = await send(tabId, { type: 'reviewSubmit', signature: prepared.signature });
+        if (!result.submitted) throw new Error('网站尚未确认评分提交成功');
+        const updated = (await chrome.storage.local.get('autoReviewJournal')).autoReviewJournal || {};
+        updated[journalKey] = { ...entry, state: 'confirmed', confirmedAt: Date.now() };
+        await chrome.storage.local.set({ autoReviewJournal: updated });
+        actions.push({ stage, submitted: true, total: result.total, criteria: result.criteria, at: Date.now() });
+        current = await refreshAssignment();
+        if (n === 9 && current.peerDone !== true) warnings.push(`${course.name}｜${task.name}：本次已提交 10 份互评，剩余要求请核实`);
+      } catch (e) {
+        if (e.authRequired) throw e;
+        warnings.push(`${course.name}｜${task.name}｜${stage}：自动评价未完成（${e.message}）`);
+        // Stop this stage after an ambiguous send; the persisted journal blocks resubmission.
+        try { current = await refreshAssignment(); } catch (refreshError) { if (refreshError.authRequired) throw refreshError; }
+        break;
+      }
+    }
+    // Each stage starts on the assignment overview rather than another review form.
+    if (stage === '自评' && MoocReviews.allowed(current, '互评')) {
+      try { current = await refreshAssignment(); }
+      catch (e) { if (e.authRequired) throw e; warnings.push(`${course.name}｜${task.name}：互评入口未能重新确认`); break; }
+    }
+  }
+  return { ...current, autoReviews: actions };
+}
 async function scan() {
   // A separate background tab preserves the user's page and login session.
   const created = await chrome.tabs.create({ url: BASE + '/home.htm', active: false });
@@ -77,7 +134,10 @@ async function scan() {
           for (const task of listing.tasks) {
             let detail = {};
             if (task.kind === '作业') {
-              try { detail = await send(tabId, { type: 'assignment', task }); }
+              try {
+                detail = await send(tabId, { type: 'assignment', task });
+                if ((await chrome.storage.local.get('autoReviewEnabled')).autoReviewEnabled) detail = await completeReviews(tabId, listUrl, task, detail, course, warnings);
+              }
               catch (e) { if (e.authRequired) throw e; detail = { error: e.message }; }
               await navigate(tabId, listUrl);
               await send(tabId, { type: 'tasks' });
@@ -244,10 +304,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('popup.html')) return;
   if (message.type === 'runNow') { const started = !running && !mailSending; if (started) void runCheck(); respond({ started }); }
   if (message.type === 'retryMail') { retryMail().then(respond); return true; }
+  if (message.type === 'setAutoReview' && typeof message.enabled === 'boolean') {
+    chrome.storage.local.set({ autoReviewEnabled: message.enabled }).then(() => respond({ saved: true, enabled: message.enabled })); return true;
+  }
   if (message.type === 'status') {
     (async () => {
       await recoverState();
-      const { pendingMail, ...state } = await chrome.storage.local.get(['lastReport', 'pendingMail', 'lastError', 'mailState', 'progress', 'nextCheckAt', 'lastSentAt', 'nextMailRetryAt', 'mailRetryAttempts']);
+      const { pendingMail, ...state } = await chrome.storage.local.get(['lastReport', 'pendingMail', 'lastError', 'mailState', 'progress', 'nextCheckAt', 'lastSentAt', 'nextMailRetryAt', 'mailRetryAttempts', 'autoReviewEnabled']);
       return { ...state, hasPendingMail: !!pendingMail, running, mailSending };
     })().then(respond).catch(error => respond({ error: error.message })); return true;
   }

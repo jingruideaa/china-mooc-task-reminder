@@ -129,6 +129,12 @@
       if (message.type === 'tasks') return taskList();
       if (message.type === 'exams') return examList();
       if (message.type === 'assignment') return assignment(message.task);
+      if (message.type === 'reviewPrepare' || message.type === 'reviewSubmit') {
+        if (loggedOut()) return { loggedOut: true };
+        if (!/^#\/learn\/hw\?/.test(location.hash)) throw new Error('自动评价仅适用于作业评价页面');
+        if (message.type === 'reviewPrepare') return MoocReviews.prepare(document, message.task, message.stage, { until, wait });
+        return MoocReviews.submit(document, message.signature, { until });
+      }
       throw new Error('未知检查指令');
     })().then(respond).catch(error => respond({ error: error.message }));
     return true;

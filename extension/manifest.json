@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "中国大学 MOOC 任务提醒",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "在当前浏览器登录会话中读取中国大学 MOOC 任务并发送提醒。",
   "permissions": [
     "alarms",
@@ -31,6 +31,7 @@
       "js": [
         "exams.js",
         "model.js",
+        "reviews.js",
         "content.js"
       ],
       "run_at": "document_idle"

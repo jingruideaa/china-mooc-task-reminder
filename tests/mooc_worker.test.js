@@ -41,7 +41,16 @@ async function scenario(options = {}) {
           if (message.type === 'dashboard') return { courses: url.includes('spocCourse') ? [] : courses, warnings: [] };
           if (message.type === 'tasks') {
             if (quizFails) throw new Error('Quiz layout unavailable');
+            if (options.assignment) return { tasks: [{ ...options.assignment, index: 0 }], hasExamMenu: false };
             return { tasks: [{ name: '新测验', kind: '测验', count: '0/2', deadline: '2026/10/18 23:30' }], hasExamMenu: false };
+          }
+          if (message.type === 'assignment') return { ...options.assignment, url: url.split('#')[0] + '#/learn/hw?id=111' };
+          if (message.type === 'reviewPrepare') return options.prepareResult || { ready: true, signature: 'synthetic-form', total: 20, criteria: 4 };
+          if (message.type === 'reviewSubmit') {
+            assert.ok(Object.values(state.autoReviewJournal || {}).some(entry => entry.state === 'submitting'));
+            if (options.reviewFails) throw new Error('Synthetic ambiguous send');
+            options.assignment.selfDone = true;
+            return { submitted: true, total: 20, criteria: 4 };
           }
           if (message.type === 'exams') {
             if (examFails) throw new Error('Exam layout unavailable');
@@ -151,4 +160,33 @@ test('watchdog catches an overdue daily check and leaves a completed slot quiet'
   assert.equal(result.state.lastScheduledSlot, '2026-10-15');
   await result.evaluate('recoverState()'); await result.settle();
   assert.equal(result.reports.length, 1);
+});
+const reviewTask = () => ({ name: '示例作业', kind: '作业', taskId: '111', submitted: true, reviewRequired: true, selfRequired: true, peerRequired: true, selfDone: false, peerDone: true, reviewDeadline: '2026/10/18 23:30' });
+test('automatic reviews are disabled by default', async () => {
+  let prepares = 0;
+  const result = await scenario({ assignment: reviewTask(), onRead: message => { if (message.type === 'reviewPrepare') prepares++; } });
+  assert.equal(prepares, 0);
+  assert.equal(result.state.lastReport.autoReviews.length, 0);
+});
+test('enabled automatic self review submits once and rereads the website state', async () => {
+  const result = await scenario({ assignment: reviewTask(), initialState: { autoReviewEnabled: true } });
+  assert.equal(result.state.lastReport.autoReviews.length, 1);
+  assert.equal(result.state.lastReport.autoReviews[0].stage, '自评');
+  assert.equal(result.state.lastReport.pending.length, 0);
+  assert.equal(Object.values(result.state.autoReviewJournal)[0].state, 'confirmed');
+});
+test('an ambiguous review send stays in the journal and cannot be submitted again', async () => {
+  let submits = 0;
+  const result = await scenario({ assignment: reviewTask(), initialState: { autoReviewEnabled: true }, reviewFails: true, onRead: message => { if (message.type === 'reviewSubmit') submits++; } });
+  assert.equal(result.state.lastReport.autoReviews.length, 0);
+  assert.equal(submits, 3);
+  await result.evaluate('runCheck()');
+  assert.equal(submits, 3);
+  assert.match(result.state.lastReport.body, /上次评分提交结果待核实/);
+  assert.equal(Object.values(result.state.autoReviewJournal)[0].state, 'submitting');
+});
+test('an unknown or unavailable review form does not trigger a submission', async () => {
+  const result = await scenario({ assignment: reviewTask(), initialState: { autoReviewEnabled: true }, prepareResult: { ready: false, skipped: true, reason: '当前没有可评价的作业' }, onRead: message => { assert.notEqual(message.type, 'reviewSubmit'); } });
+  assert.equal(result.state.lastReport.autoReviews.length, 0);
+  assert.match(result.state.lastReport.body, /当前没有可评价的作业/);
 });

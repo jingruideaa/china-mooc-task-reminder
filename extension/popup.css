@@ -16,6 +16,9 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #24
 .secondary{background:#fff;border-color:#cdd9ce;color:#285940}
 .secondary:hover:not(:disabled){background:#edf3ec}
 .status{color:#375343;white-space:pre-wrap}
+.auto-review{display:flex;align-items:flex-start;gap:8px;padding:10px 0 14px;font-size:12px;cursor:pointer}
+.auto-review input{accent-color:#24644b;margin-top:4px}
+.auto-review small{display:block;font-size:10px;color:#7a8172;margin-top:2px}
 .notice{margin-top:10px;padding:10px 12px;background:#fff1df;border:1px solid #e5cb9f;border-radius:8px;color:#704716;white-space:pre-wrap;overflow-wrap:anywhere}
 .summary{display:grid;grid-template-columns:repeat(4,1fr);padding:13px 0;background:#fff;border:1px solid #dce5db;border-radius:10px}
 .summary div{text-align:center;border-right:1px solid #e8eee6}

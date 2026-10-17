@@ -86,6 +86,7 @@
   }
   function makeReport(courses, tasks, warnings = [], now = Date.now(), examChecks = []) {
     const rawTasks = tasks;
+    const autoReviews = rawTasks.flatMap(task => (task.autoReviews || []).map(action => ({ ...action, course: task.course, name: task.name })));
     tasks = uniqueTasks(tasks);
     const pending = [], uncertain = [], upcoming = [], exams = [];
     const add = (task, stage, done, deadline, future = false) => {
@@ -138,11 +139,12 @@
       '7 天内截止的未完成考试（含状态待核实）：', ...(examDueSoon.length ? examDueSoon.map(examLine) : ['无已识别项目']), '',
       '需要核实：', ...(uncertain.length ? uncertain.map(line) : warnings.length ? [] : ['无']), ...warnings.map(w => `- ${w}`), '',
       '尚未开放的评价阶段：', ...(upcoming.length ? upcoming.map(line) : ['无']), '',
+      '本次自动评价（各评分项按最高分）：', ...(autoReviews.length ? autoReviews.map(action => `- ${action.course}｜${action.name}｜${action.stage}｜网站已确认提交｜总分 ${action.total}｜${action.criteria} 个评分项`) : ['本次没有自动提交评价']), '',
       `确认未完成 ${pending.length} 项，7 天内到期 ${near.length} 项，待核实 ${uncertain.length + warnings.length} 项。`,
       warnings.length || uncertain.length ? '本次存在未能确认的项目，不能据此认定所有任务均已完成。' : '',
       `共读取 ${rawTasks.length} 条任务记录，合并同源记录后 ${tasks.length} 项。`
     ].join('\n');
-    return { id: `mooc-${now}`, checkedAt, checkedAtMs: now, courses, tasks, rawTaskCount: rawTasks.length, pending, near, urgent, overdue, uncertain, uncertainNear, upcoming, exams, examChecks, examOpeningSoon, examDueSoon, warnings, body };
+    return { id: `mooc-${now}`, checkedAt, checkedAtMs: now, courses, tasks, rawTaskCount: rawTasks.length, pending, near, urgent, overdue, uncertain, uncertainNear, upcoming, exams, examChecks, examOpeningSoon, examDueSoon, autoReviews, warnings, body };
   }
   scope.MoocModel = { timestamp, chinaDate, nextRun, lastSlot, hasClass, phaseDone, peerState, quizDone, uniqueTasks, makeReport };
   if (typeof module !== 'undefined') module.exports = scope.MoocModel;

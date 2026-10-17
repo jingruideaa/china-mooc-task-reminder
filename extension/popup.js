@@ -46,6 +46,7 @@ async function refresh() {
   try {
     const state = await chrome.runtime.sendMessage({ type: 'status' });
     if (!state || state.error) throw new Error(state?.error || '后台未返回状态');
+    $('#auto-review').checked = !!state.autoReviewEnabled;
     run.disabled = requesting || !!state.running || !!state.mailSending;
     run.textContent = state.running ? '正在检查…' : '立即检查并发邮件';
     retry.hidden = !state.hasPendingMail;
@@ -84,6 +85,13 @@ async function request(type) {
 }
 run.addEventListener('click', () => { void request('runNow'); });
 retry.addEventListener('click', () => { void request('retryMail'); });
+$('#auto-review').addEventListener('change', async event => {
+  const input = event.target;
+  input.disabled = true;
+  try { await chrome.runtime.sendMessage({ type: 'setAutoReview', enabled: input.checked }); }
+  catch (e) { input.checked = !input.checked; $('#error').hidden = false; $('#error').textContent = `设置未保存：${e.message}`; }
+  finally { input.disabled = false; await refresh(); }
+});
 $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(currentReport.body); $('#copy').textContent = '已复制'; }
   catch (_) { $('#copy').textContent = '复制失败，请手动选择报告文字'; }
